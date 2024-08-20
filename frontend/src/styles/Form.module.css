@@ -1,0 +1,60 @@
+/* styles/Form.module.css */
+.container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: auto; /* Remove fixed height */
+  margin-top: 60px; /* Push content down by the height of the navbar */
+  padding-top: 60px; /* Ensure padding is maintained */
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 2rem;
+  min-width: 50vw;
+  border: 1px solid #5e5e5e;
+  padding: 2rem;
+}
+
+.inputGroup {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  margin-bottom: 1rem;
+}
+
+  .label {
+    margin-bottom: 0.5rem;
+  }
+  
+  .input {
+    padding: 0.5rem;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  
+  .button {
+    padding: 0.5rem 1rem;
+    cursor: pointer;
+  }
+
+  .title {
+   margin: 1rem;
+   border-top: 1px solid #5e5e5e;
+   border-bottom: 1px solid #5e5e5e;
+ }
+
+
+  .audio {
+    display: none;
+  }
+
+  .audioList {
+    /* remove li dots */
+    list-style-type: none;
+  }
+  
+

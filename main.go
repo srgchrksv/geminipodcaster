@@ -10,31 +10,39 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gin-contrib/cors"
+	"github.com/gin-contrib/sessions"
+	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
 	"github.com/google/generative-ai-go/genai"
+	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 	"github.com/joho/godotenv"
 	"google.golang.org/api/option"
 )
+
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+	},
+}
 
 type Segment struct {
 	Speaker string `json:"speaker"`
 	Text    string `json:"text"`
 }
 
-type UserPrompt struct {
-	Text string `json:"text"`
-}
-
 type PodcastSession struct {
-	UserPrompt chan []byte
+	InteractionPrompt chan []byte
+	PodcastContext    string
 }
 type Podcast struct {
 	Podcast []Segment `json:"podcast"`
 }
 
 var (
-	sessions = make(map[string]*PodcastSession)
-	mu       sync.Mutex
+	podcastSessions = make(map[string]*PodcastSession)
+	mu              sync.Mutex
 )
 
 func main() {
@@ -64,7 +72,7 @@ func main() {
 	model.SetMaxOutputTokens(8192)
 	model.ResponseMIMEType = "application/json"
 	model.SystemInstruction = &genai.Content{
-		Parts: []genai.Part{genai.Text("Generate a very short, fun and engaging podcast based on the provided context. If you see a context message starting with USER INTERCATION, regenerate podcast based on the USER INTERCATION message, try to fullfill USER INTERCATION. If USER INTERCATION, respond only with new conversation messages. Example speaker names are 'Host' and 'Guest' dont include 'User'. ")},
+		Parts: []genai.Part{genai.Text("Generate a very short, fun and engaging podcast based on the provided context. If you see a context message starting with USER INTERCATION, regenerate podcast based on the USER INTERCATION message, try to fullfill USER INTERCATION. If USER INTERCATION, respond only with new conversation messages. Example speaker names are 'Host' and 'Guest', dont include 'User'. ")},
 	}
 	// schema for structured response
 	model.ResponseSchema = &genai.Schema{
@@ -92,37 +100,73 @@ func main() {
 
 	// Create a new gin router
 	r := gin.Default()
+
+	store := cookie.NewStore([]byte("secret"))
+	r.Use(sessions.Sessions("mysession", store))
+	// Configure CORS middleware
+	config := cors.DefaultConfig()
+	config.AllowOrigins = []string{"http://localhost:3000"} // Change this to your frontend URL
+	config.AllowMethods = []string{"GET", "POST"}
+	config.AllowHeaders = []string{"Content-Type", "text/plain", "application/json"} // Combine all necessary headers
+	config.AllowCredentials = true                                                   // Allow credentials (cookies)
+	r.Use(cors.New(config))
+
+	r.GET("/", func(c *gin.Context) {
+		// Create a new session ID
+		session := sessions.Default(c)
+		if session.Get("sessionID") == nil {
+			session.Set("sessionID", uuid.New().String())
+			session.Save()
+		}
+		podcastSession := session.Get("sessionID").(string)
+		c.JSON(http.StatusOK, gin.H{"message": "Podcast started", "session_id": podcastSession})
+	})
+
 	// Register the route with a closure to pass the api_key
-	r.GET("/start", func(c *gin.Context) {
+	r.GET("/podcast", func(c *gin.Context) {
 		startPodcast(c, model)
 	})
-	r.GET("/interact", podcastInteraction)
+	r.POST("/interact", func(c *gin.Context) {
+		podcastInteraction(c)
+	})
 	// Start the server
-	r.Run(":8080")
+	r.Run(":8000")
 }
 
 func startPodcast(c *gin.Context, model *genai.GenerativeModel) {
-	// var req struct {
-	// 	Content []Segment `json:"content"`
-	// }
-	// if err := c.ShouldBindJSON(&req); err != nil {
-	// 	c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-	// 	return
-	// }
-	// Generate a unique session ID
-	// sessionID := uuid.New().String()
+	session := sessions.Default(c)
+	sessionID := session.Get("sessionID")
+	if sessionID == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No sessions found"})
+		return
+	}
+	podcastSession := sessionID.(string)
 
-	// thats the base context for the podcast will be coming from the client
-	podcastContext := "Golang programming language was created by Google. Its a statically typed, compiled language."
+	// get podcastContext from the request
+	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	if err != nil {
+		log.Println("Upgrade error:", err)
+		return
+	}
+	// defer conn.Close()
+	// Read binary data from WebSocket message
+	_, message, err := conn.ReadMessage()
+	if err != nil {
+		log.Println("Read error:", err)
+		return
+	}
+	podcastContext := string(message)
 
-	// Create a new chat session
-	session := model.StartChat()
-	session.History = []*genai.Content{}
+	// Create a new chat chatSession
+	chatSession := model.StartChat()
+	chatSession.History = []*genai.Content{}
 
 	// Create a new channel for user interaction prompt store it in users session
-	text := make(chan []byte)
+	interactionPrompt := make(chan []byte)
 	mu.Lock()
-	sessions["1"] = &PodcastSession{UserPrompt: text}
+	podcastSessions[podcastSession] = &PodcastSession{
+		InteractionPrompt: interactionPrompt,
+		PodcastContext:    podcastContext}
 	mu.Unlock()
 
 	// channel for stopping the podcast
@@ -134,26 +178,27 @@ func startPodcast(c *gin.Context, model *genai.GenerativeModel) {
 		for {
 			select {
 			default:
-				podcastTranscript, err := gemini(c, session, podcastContext)
+				// podcastTranscript, err := gemini(c, chatSession, podcastSessions[podcastSession].PodcastContext)
+				podcastTranscript, err := gemini(c, chatSession, podcastContext)
 				if err != nil {
 					log.Fatal(err)
 				}
-				err = podcasting("1", podcastTranscript, session, podcastContext, StopChan)
+				err = podcasting(conn, podcastSession, podcastTranscript, chatSession, podcastSessions[podcastSession].PodcastContext, StopChan)
 				if err != nil {
 					return
 				}
 				time.Sleep(2 * time.Second)
 			case <-StopChan:
 				fmt.Println("Podcast finished successfully")
+				conn.Close()
 				break P
 			}
 		}
 	}()
-	fmt.Println("Podcast started")
-	c.JSON(http.StatusOK, gin.H{"message": "Podcast started", "session_id": "1"})
+
 }
 
-func podcasting(sessionID string, podcastTranscript []Segment, session *genai.ChatSession, podcastContext string, StopChan chan interface{}) error {
+func podcasting(conn *websocket.Conn, sessionID string, podcastTranscript []Segment, session *genai.ChatSession, podcastContext string, StopChan chan interface{}) error {
 	// history of the conversation that has been done so far, in case of users interaction we wont send all messages as the context again
 	var history []*genai.Content
 	history = append(history, &genai.Content{Role: "User", Parts: []genai.Part{genai.Text(podcastContext)}})
@@ -166,12 +211,28 @@ func podcasting(sessionID string, podcastTranscript []Segment, session *genai.Ch
 		select {
 		default:
 			fmt.Printf("%s: %s\n", segment.Speaker, segment.Text)
+
+			// write podcast message to the websocket
+			err := conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("%s: %s\n", segment.Speaker, segment.Text)))
+			if err != nil {
+				fmt.Println("Error writing ws message:", err)
+				break
+			}
+
 			time.Sleep(3 * time.Second) // Simulate time delay between segments
-		case userPrompt := <-sessions[sessionID].UserPrompt:
+		case userPrompt := <-podcastSessions[sessionID].InteractionPrompt:
 			// on user interaction we regenerate the podcast based on the user interaction
 			fmt.Printf("\n\n%v\n\n", string(userPrompt))
+
+			// write users intercation to the websocket
+			err := conn.WriteMessage(websocket.TextMessage, userPrompt)
+			if err != nil {
+				fmt.Println("Error writing ws message:", err)
+				break
+			}
+
 			mu.Lock()
-			sessions[sessionID] = &PodcastSession{UserPrompt: make(chan []byte)}
+			podcastSessions[sessionID] = &PodcastSession{InteractionPrompt: make(chan []byte)}
 			mu.Unlock()
 
 			podcastData, err := json.Marshal(Podcast{Podcast: conversation})
@@ -199,24 +260,34 @@ func podcasting(sessionID string, podcastTranscript []Segment, session *genai.Ch
 
 // route for users interaction
 func podcastInteraction(c *gin.Context) {
-	// var req struct {
-	// 	SessionID string `json:"session_id"`
-	// }
-	// if err := c.ShouldBindJSON(&req); err != nil {
-	// 	c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-	// 	return
-	// }
+	session := sessions.Default(c)
+	sessionID := session.Get("sessionID")
+	if sessionID == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No sessions found"})
+		return
+	}
+
+	// Process form data
+	formData, err := c.MultipartForm()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid form data"})
+		return
+	}
+
+	// Access the form data
 	mu.Lock()
-	// session, exists := sessions[req.SessionID]
-	session, exists := sessions["1"]
+	podcastSession, exists := podcastSessions[sessionID.(string)]
+	if !exists {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Session is not in podcastSessions"})
+	}
 	mu.Unlock()
 
-	if exists {
-		session.UserPrompt <- []byte("USERS INTERACTION: Can you tell me something about Kubernetes that was built with golang?")
-		c.JSON(http.StatusOK, gin.H{"message": "Users interaction."})
-	} else {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid session ID."})
-	}
+	// podcastSession.InteractionPrompt <- []byte(fmt.Sprintf("USERS INTERACTION: %v\n", req.UsersInteraction))
+
+	userInteraction := formData.Value["user_interaction"][0]
+	podcastSession.InteractionPrompt <- []byte(fmt.Sprintf("USERS INTERACTION: %v\n", userInteraction))
+	c.JSON(http.StatusOK, gin.H{"message": "Users interaction."})
+
 }
 
 func gemini(ctx context.Context, session *genai.ChatSession, podcastContext string) ([]Segment, error) {

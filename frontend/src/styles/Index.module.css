@@ -1,0 +1,29 @@
+/* styles/Index.module.css */
+.main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start; /* Align items from the top */
+  height: 100vh;
+  padding-top: 60px; /* Push content down by the height of the navbar */
+}
+
+.title {
+  font-size: 2rem;
+  margin-top: 3rem;
+}
+
+.container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: auto; /* Remove fixed height */
+}
+
+/* Media query for smaller screens */
+@media (max-width: 600px) {
+  .main {
+    padding-top: 60px; /* Ensure padding is maintained on smaller screens */
+  }
+}

@@ -1,0 +1,21 @@
+.transcriptions {
+    width: 50vw;
+  }
+
+  .host {
+    color: rgb(177, 177, 177);
+  }
+
+  .usersInteraction {
+    color: rgb(255, 255, 255);
+  }
+
+  .guest {
+    color: rgb(97, 96, 96);
+  }
+
+  .title {
+    margin: 1rem;
+    border-top: 1px solid #5e5e5e;
+    border-bottom: 1px solid #5e5e5e;
+  }
