@@ -1,19 +1,23 @@
 import { useState } from 'react';
 import Transcriptions from './Transcriptions';
 import styles from '../styles/Form.module.css';
+import Podcast from './Podcast';
+
 
 export default function Form() {
     const [transcriptions, setTranscriptions] = useState([]);
-    const [audioQueue, setAudioQueue] = useState([]);
-    const [sessionId, setSessionId] = useState(null);
-
-
+    const [text, setText] = useState('');
+    let textTranscriptionQueue = [];
+    let audioQueue = [];
+    let isProcessingQueues = false;
     const handleSubmitContext = async (event) => {
         event.preventDefault();
         setTranscriptions([]);
-
         try {
-            const response = await fetch('http://localhost:8000/');
+            const response = await fetch('http://localhost:8000/', {
+                method: 'GET',
+                credentials: 'include',
+            });
             if (!response.ok) {
                 console.error('Failed to make HTTP GET request');
             } else {
@@ -27,25 +31,36 @@ export default function Form() {
         try {
             const formData = new FormData(event.target);
             const file = formData.get('text_file'); // Assuming the file input name is 'file'
-            console.log(formData);
+            // console.log(formData);
 
             if (file && file.type === "text/plain") {
                 const reader = new FileReader();
-                reader.onload = function(event) {
+                reader.onload = function (event) {
                     const fileBinary = event.target.result;
 
                     const socket = new WebSocket("ws://localhost:8000/podcast");
                     socket.binaryType = "arraybuffer"; // Set binary type to arraybuffer
-                    socket.onopen = function() {
+                    socket.onopen = function () {
                         console.log('WebSocket connection established');
                         socket.send(fileBinary); // Send file data as binary
                     };
+
+
                     socket.onmessage = (event) => {
                         if (typeof event.data === 'string') {
-                            console.log(event.data);
-                            setTranscriptions((prevTranscriptions) => [...prevTranscriptions, event.data]);
-                        } else if (event.data instanceof Blob) {
-                            console.log(event.data);
+                            // Add text transcription to the queue
+                            const text = event.data
+                            if (text.includes("USERS INTERACTION:")){ 
+                                setTranscriptions((prevTranscriptions) => [...prevTranscriptions, text]);
+                                return
+                            }
+                            textTranscriptionQueue.push(event.data);
+                            processQueues();
+                        } else if (typeof event.data === 'object') {
+                            // Add audio to the queue
+                            const blob = new Blob([event.data]);
+                            audioQueue.push(URL.createObjectURL(blob));
+                            processQueues();
                         }
                     };
                 };
@@ -56,45 +71,42 @@ export default function Form() {
         } catch (error) {
             console.error('Error:', error);
         }
+        function processQueues() {
+            if (isProcessingQueues) {
+                return;
+            }
+
+            isProcessingQueues = true;
+
+            // Process text transcription first
+            if (textTranscriptionQueue.length > 0) {
+                const nextTranscription = textTranscriptionQueue.shift();
+                setTranscriptions((prevTranscriptions) => [...prevTranscriptions, nextTranscription]);
+            }
+
+            // Then process audio
+            if (audioQueue.length > 0) {
+                const nextAudioUrl = audioQueue.shift();
+                const audio = new Audio(nextAudioUrl);
+                audio.onended = () => {
+                    console.log('Audio ended');
+                    isProcessingQueues = false;
+                    processQueues();
+                }
+                console.log('Audio play');
+                audio.play();
+            } else {
+                isProcessingQueues = false;
+            }
+        }
+
     }
-    const handleSubmit = async (event) => {
-        event.preventDefault();
-        try {
-            const response = await fetch('http://localhost:8000/', {
-                method: 'GET',
-            });
 
-            if (!response.ok) {
-                console.error('Failed to send interaction');
-            } else {
-                const data = await response.json()
-                console.log(data)
-            }
-        } catch (error) {
-            console.error('Error:', error);
-        }
-    };
-    const handleSubmitSession = async (event) => {
-        event.preventDefault();
-        try {
-            const response = await fetch('http://localhost:8000/session', {
-                method: 'GET',
-                credentials: 'include',
-            });
-
-            if (!response.ok) {
-                console.error('Failed to send interaction');
-            } else {
-                const data = await response.json()
-                console.log(data)
-            }
-        } catch (error) {
-            console.error('Error:', error);
-        }
-    };
 
     const handleSubmitInteraction = async (event) => {
         event.preventDefault();
+        textTranscriptionQueue = []
+        audioQueue = []
         const formData = new FormData(event.target);
         try {
             const response = await fetch('http://localhost:8000/interact', {
@@ -114,10 +126,8 @@ export default function Form() {
         }
     };
 
-
     return (
         <>
-        
             <div className={styles.container}>
                 <form onSubmit={handleSubmitContext} className={styles.form}>
                     <div className={styles.inputGroup}>
@@ -133,19 +143,8 @@ export default function Form() {
                     </div>
                     <button className={styles.button} type="submit">Send message</button>
                 </form>
-                <button className={styles.button} onClick={handleSubmit}>GET</button>
-                <button className={styles.button} onClick={handleSubmitSession}>SESSION</button>
+                <h2 className={styles.title}>Transcriptions</h2>
                 <Transcriptions transcriptions={transcriptions} />
-                {audioQueue.length > 0 && (<div>
-                    {/* <h2>Audio Queue</h2> */}
-                    <ul>
-                        {audioQueue.map((audioUrl, index) => (
-                            <li className={styles.audioList} key={index}>
-                                <audio className={styles.audio} controls autoPlay src={audioUrl}></audio>
-                            </li>
-                        ))}
-                    </ul>
-                </div>)}
             </div>
         </>
     );

@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"sync"
 	"time"
 
+	texttospeech "cloud.google.com/go/texttospeech/apiv1"
+	"cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-contrib/sessions/cookie"
@@ -44,6 +47,35 @@ var (
 	podcastSessions = make(map[string]*PodcastSession)
 	mu              sync.Mutex
 )
+var voices = []string{"en-AU-Standard-B", "en-AU-Standard-C", "en-IN-Standard-A", "en-IN-Standard-B", "en-GB-Standard-A", "en-GB-Standard-B", "en-US-Standard-A", "en-US-Standard-C"}
+
+func textToSpeech(ctx context.Context, client *texttospeech.Client, text, voice string) ([]byte, error) {
+	// Perform the text-to-speech request on the text input with the selected
+	// voice parameters and audio file type.
+	req := texttospeechpb.SynthesizeSpeechRequest{
+		// Set the text input to be synthesized.
+		Input: &texttospeechpb.SynthesisInput{
+			InputSource: &texttospeechpb.SynthesisInput_Text{Text: text},
+		},
+		// Build the voice request, select the language code ("en-US") and the SSML
+		// voice gender ("neutral").
+		Voice: &texttospeechpb.VoiceSelectionParams{
+			LanguageCode: "en-US",
+			SsmlGender:   texttospeechpb.SsmlVoiceGender_NEUTRAL,
+			Name:         voice,
+		},
+		// Select the type of audio file you want returned.
+		AudioConfig: &texttospeechpb.AudioConfig{
+			AudioEncoding: texttospeechpb.AudioEncoding_MP3,
+		},
+	}
+
+	resp, err := client.SynthesizeSpeech(ctx, &req)
+	if err != nil {
+		return nil, err
+	}
+	return resp.AudioContent, nil
+}
 
 func main() {
 
@@ -54,6 +86,12 @@ func main() {
 	}
 	apiKey := option.WithAPIKey(os.Getenv("GEMINI_API_KEY"))
 	ctx := context.Background()
+
+	clientTextToSpeech, err := texttospeech.NewClient(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer clientTextToSpeech.Close()
 
 	// Create a new genai client
 	client, err := genai.NewClient(ctx, apiKey)
@@ -119,12 +157,12 @@ func main() {
 			session.Save()
 		}
 		podcastSession := session.Get("sessionID").(string)
-		c.JSON(http.StatusOK, gin.H{"message": "Podcast started", "session_id": podcastSession})
+		c.JSON(http.StatusOK, gin.H{"message": "Podcast starting...", "session_id": podcastSession})
 	})
 
 	// Register the route with a closure to pass the api_key
 	r.GET("/podcast", func(c *gin.Context) {
-		startPodcast(c, model)
+		startPodcast(c, model, clientTextToSpeech)
 	})
 	r.POST("/interact", func(c *gin.Context) {
 		podcastInteraction(c)
@@ -133,22 +171,23 @@ func main() {
 	r.Run(":8000")
 }
 
-func startPodcast(c *gin.Context, model *genai.GenerativeModel) {
+func startPodcast(c *gin.Context, model *genai.GenerativeModel, clientTextToSpeech *texttospeech.Client) {
 	session := sessions.Default(c)
 	sessionID := session.Get("sessionID")
 	if sessionID == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No sessions found"})
 		return
 	}
-	podcastSession := sessionID.(string)
-
+	log.Println("Session ID:", sessionID)
 	// get podcastContext from the request
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		log.Println("Upgrade error:", err)
 		return
 	}
-	// defer conn.Close()
+
+	podcastSession := sessionID.(string)
+
 	// Read binary data from WebSocket message
 	_, message, err := conn.ReadMessage()
 	if err != nil {
@@ -156,6 +195,7 @@ func startPodcast(c *gin.Context, model *genai.GenerativeModel) {
 		return
 	}
 	podcastContext := string(message)
+	log.Println("Podcast context", podcastContext)
 
 	// Create a new chat chatSession
 	chatSession := model.StartChat()
@@ -172,6 +212,17 @@ func startPodcast(c *gin.Context, model *genai.GenerativeModel) {
 	// channel for stopping the podcast
 	StopChan := make(chan interface{})
 
+	// set random voices for the podcast
+	setVoices := make(map[string]string)
+	randomInt := rand.Intn(len(voices))
+	setVoices["Host"] = voices[randomInt]
+	randomDecrement := randomInt - 1
+	if randomDecrement < 0 {
+		setVoices["Guest"] = voices[randomDecrement+2]
+	} else {
+		setVoices["Guest"] = voices[randomDecrement]
+	}
+
 	// Start the podcast
 	go func() {
 	P:
@@ -183,7 +234,7 @@ func startPodcast(c *gin.Context, model *genai.GenerativeModel) {
 				if err != nil {
 					log.Fatal(err)
 				}
-				err = podcasting(conn, podcastSession, podcastTranscript, chatSession, podcastSessions[podcastSession].PodcastContext, StopChan)
+				err = podcasting(c, conn, podcastSession, podcastTranscript, chatSession, podcastSessions[podcastSession].PodcastContext, clientTextToSpeech, setVoices, StopChan)
 				if err != nil {
 					return
 				}
@@ -198,7 +249,7 @@ func startPodcast(c *gin.Context, model *genai.GenerativeModel) {
 
 }
 
-func podcasting(conn *websocket.Conn, sessionID string, podcastTranscript []Segment, session *genai.ChatSession, podcastContext string, StopChan chan interface{}) error {
+func podcasting(c *gin.Context, conn *websocket.Conn, sessionID string, podcastTranscript []Segment, session *genai.ChatSession, podcastContext string, clientTextToSpeech *texttospeech.Client, setVoices map[string]string, StopChan chan interface{}) error {
 	// history of the conversation that has been done so far, in case of users interaction we wont send all messages as the context again
 	var history []*genai.Content
 	history = append(history, &genai.Content{Role: "User", Parts: []genai.Part{genai.Text(podcastContext)}})
@@ -217,6 +268,16 @@ func podcasting(conn *websocket.Conn, sessionID string, podcastTranscript []Segm
 			if err != nil {
 				fmt.Println("Error writing ws message:", err)
 				break
+			}
+
+			audio, err := textToSpeech(c, clientTextToSpeech, segment.Text, setVoices[segment.Speaker])
+			if err != nil {
+				return err
+			}
+			err = conn.WriteMessage(websocket.BinaryMessage, audio)
+			if err != nil {
+				fmt.Println("Error writing WS binary message:", err)
+				return err
 			}
 
 			time.Sleep(3 * time.Second) // Simulate time delay between segments
@@ -274,7 +335,7 @@ func podcastInteraction(c *gin.Context) {
 		return
 	}
 
-	// Access the form data
+	// Set the session ID
 	mu.Lock()
 	podcastSession, exists := podcastSessions[sessionID.(string)]
 	if !exists {
