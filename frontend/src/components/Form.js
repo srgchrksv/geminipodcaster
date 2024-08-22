@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import Transcriptions from './Transcriptions';
 import styles from '../styles/Form.module.css';
-import Podcast from './Podcast';
 
 
 export default function Form() {
@@ -143,7 +142,6 @@ export default function Form() {
                     </div>
                     <button className={styles.button} type="submit">Send message</button>
                 </form>
-                <h2 className={styles.title}>Transcriptions</h2>
                 <Transcriptions transcriptions={transcriptions} />
             </div>
         </>

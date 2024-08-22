@@ -11,12 +11,13 @@ To run get an .env file with:
 GEMINI_API_KEY=
 GOOGLE_APPLICATION_CREDENTIALS=
 ```
+To run the service, start a go gin server in ```/backend``` directory:
 
-run to get all required go modules
+first get all required go modules
 ```
 go mod tidy
 ```
-and then run gin server 
+then start the server
 ```
 go run main.go
 ```
