@@ -6,13 +6,28 @@
     color: rgb(177, 177, 177);
   }
 
+  .host .speaker {
+    color: rgb(255, 255, 255);
+    text-shadow: 1px 1px 2px rgb(255, 255, 255);
+  }
+
   .usersInteraction {
     color: rgb(255, 255, 255);
+  }
+
+  .usersInteraction .speaker {
+    color: rgb(255, 255, 255);
+    text-shadow: 1px 1px 2px lime;
   }
 
   .guest {
     color: rgb(97, 96, 96);
   }
+
+  .guest .speaker{
+    color: rgb(255, 255, 255);
+    text-shadow:1px 2px 2px rgb(168, 168, 168)}
+
 
   .title {
     margin: 1rem;
