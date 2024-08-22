@@ -18,7 +18,7 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-func StartPodcast(c *gin.Context, model models.Gemini, services services.Services) {
+func StartPodcast(c *gin.Context, model *models.Gemini, services services.Services) {
 	session := sessions.Default(c)
 	sessionID := session.Get("sessionID")
 	if sessionID == nil {

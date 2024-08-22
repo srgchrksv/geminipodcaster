@@ -4,11 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
+	"strings"
 	"sync"
 	"time"
 
+	speech "cloud.google.com/go/speech/apiv1"
+	"cloud.google.com/go/speech/apiv1/speechpb"
 	texttospeech "cloud.google.com/go/texttospeech/apiv1"
 	"cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
 	"github.com/gin-gonic/gin"
@@ -31,12 +35,44 @@ type Services struct {
 	Voices             []string
 	PodcastSessions    map[string]*PodcastSession
 	ClientTextToSpeech *texttospeech.Client
+	ClientSpeechToText *speech.Client
 }
 
 func NewServices() *Services {
 	return &Services{
 		PodcastSessions: make(map[string]*PodcastSession),
 	}
+}
+
+func (s *Services) SpeechToText(ctx context.Context, audio []byte) (string, error) {
+	resp, err := s.ClientSpeechToText.Recognize(ctx, &speechpb.RecognizeRequest{
+		Config: &speechpb.RecognitionConfig{
+			Encoding:        speechpb.RecognitionConfig_MP3,
+			SampleRateHertz: 16000,
+			LanguageCode:    "en-US",
+		},
+		Audio: &speechpb.RecognitionAudio{
+			AudioSource: &speechpb.RecognitionAudio_Content{Content: audio},
+		},
+	},
+	)
+	if err != nil {
+		log.Fatalf("failed to recognize: %v", err)
+	}
+
+	// Extract the transcriptions from the response
+	var transcriptions []string
+	for _, result := range resp.Results {
+		for _, alternative := range result.Alternatives {
+			transcriptions = append(transcriptions, alternative.Transcript)
+		}
+	}
+	fmt.Println("RESP:", resp.Results)
+
+	// Combine the transcriptions into a single string
+	transcription := strings.Join(transcriptions, " ")
+
+	return transcription, nil
 }
 
 func (s *Services) TextToSpeech(ctx context.Context, text, voice string) ([]byte, error) {
@@ -67,7 +103,7 @@ func (s *Services) TextToSpeech(ctx context.Context, text, voice string) ([]byte
 	return resp.AudioContent, nil
 }
 
-func (s Services) Podcast(c *gin.Context, conn *websocket.Conn, model models.Gemini, sessionId string, clientTextToSpeech *texttospeech.Client) {
+func (s Services) Podcast(c *gin.Context, conn *websocket.Conn, model *models.Gemini, sessionId string, clientTextToSpeech *texttospeech.Client) {
 	// Read binary data from WebSocket message
 	_, message, err := conn.ReadMessage()
 	if err != nil {
@@ -75,14 +111,12 @@ func (s Services) Podcast(c *gin.Context, conn *websocket.Conn, model models.Gem
 		return
 	}
 	podcastContext := string(message)
-	log.Println("Podcast context", podcastContext)
 
 	// Create a new chat chatSession
-	chatSession := model.StartChat()
+	chatSession := model.Gemini.StartChat()
 	chatSession.History = []*genai.Content{}
 
 	// Create a new channel for user interaction prompt store it in users session
-
 	interactionPrompt := make(chan []byte)
 	mu.Lock()
 	s.PodcastSessions[sessionId] = &PodcastSession{
@@ -112,12 +146,12 @@ func (s Services) Podcast(c *gin.Context, conn *websocket.Conn, model models.Gem
 		for {
 			select {
 			default:
-				podcastTranscript, err := model.MockGemini(c, chatSession)
-				// podcastTranscript, err := model.SendMessages(c, s.PodcastSessions[sessionId].ChatSession, podcastContext)
+				podcastTranscript, err := model.SendMessages(c, s.PodcastSessions[sessionId].ChatSession, s.PodcastSessions[sessionId].PodcastContext)
+				// podcastTranscript, err := model.MockGemini(c, s.PodcastSessions[sessionId].ChatSession, s.PodcastSessions[sessionId].PodcastContext)
 				if err != nil {
 					log.Fatal(err)
 				}
-				err = s.Podcasting(c, conn, sessionId, podcastTranscript, chatSession, s.PodcastSessions[sessionId].PodcastContext, clientTextToSpeech, setVoices, StopChan)
+				err = s.Podcasting(c, conn, sessionId, podcastTranscript, clientTextToSpeech, setVoices, StopChan)
 				if err != nil {
 					return
 				}
@@ -131,10 +165,10 @@ func (s Services) Podcast(c *gin.Context, conn *websocket.Conn, model models.Gem
 	}()
 }
 
-func (s *Services) Podcasting(c *gin.Context, conn *websocket.Conn, sessionID string, podcastTranscript []models.Segment, session *genai.ChatSession, podcastContext string, clientTextToSpeech *texttospeech.Client, setVoices map[string]string, StopChan chan interface{}) error {
+func (s *Services) Podcasting(c *gin.Context, conn *websocket.Conn, sessionID string, podcastTranscript []models.Segment, clientTextToSpeech *texttospeech.Client, setVoices map[string]string, StopChan chan interface{}) error {
 	// history of the conversation that has been done so far, in case of users interaction we wont send all messages as the context again
 	var history []*genai.Content
-	history = append(history, &genai.Content{Role: "User", Parts: []genai.Part{genai.Text(podcastContext)}})
+	history = append(history, &genai.Content{Role: "User", Parts: []genai.Part{genai.Text(s.PodcastSessions[sessionID].PodcastContext)}})
 
 	//iterate over the podcast transcript
 	for i, segment := range podcastTranscript {
@@ -171,10 +205,6 @@ func (s *Services) Podcasting(c *gin.Context, conn *websocket.Conn, sessionID st
 				break
 			}
 
-			mu.Lock()
-			s.PodcastSessions[sessionID] = &PodcastSession{InteractionPrompt: make(chan []byte)}
-			mu.Unlock()
-
 			podcastData, err := json.Marshal(models.Podcast{Podcast: podcastTranscript[:i+1]})
 			if err != nil {
 				log.Fatal(err)
@@ -189,8 +219,11 @@ func (s *Services) Podcasting(c *gin.Context, conn *websocket.Conn, sessionID st
 			}
 			history = append(history, newContent)
 			history = append(history, &genai.Content{Role: "User", Parts: []genai.Part{genai.Text(string(userData))}})
-			session.History = history
-			return nil
+			mu.Lock()
+			s.PodcastSessions[sessionID].ChatSession.History = history
+			s.PodcastSessions[sessionID].InteractionPrompt = make(chan []byte)
+			mu.Unlock()
+			return err
 		}
 	}
 	close(StopChan)
@@ -199,21 +232,39 @@ func (s *Services) Podcasting(c *gin.Context, conn *websocket.Conn, sessionID st
 }
 
 func (s Services) UserInteraction(c *gin.Context, sessionID string) error {
-
-	// Process form data
-	formData, err := c.MultipartForm()
+	// Retrieve the audio file from the form data
+	audioFile, err := c.FormFile("audio_file")
 	if err != nil {
-		return fmt.Errorf("error invalid form data: %v", err)
+		return fmt.Errorf("invalid audio file: %v", err)
 	}
 
-	// Set the session ID
+	// Open the audio file
+	audio, err := audioFile.Open()
+	if err != nil {
+		return fmt.Errorf("error opening audio file: %v", err)
+	}
+	defer audio.Close()
+
+	// Read the audio file content
+	audioData, err := io.ReadAll(audio)
+	if err != nil {
+		return fmt.Errorf("error reading audio file: %v", err)
+	}
+
+	// Check the session ID
 	mu.Lock()
 	podcastSession, exists := s.PodcastSessions[sessionID]
 	if !exists {
 		return fmt.Errorf("session is not in podcastSessions: %v", err)
 	}
+
 	// podcastSession.InteractionPrompt <- []byte(fmt.Sprintf("USERS INTERACTION: %v\n", req.UsersInteraction))
-	userInteraction := formData.Value["user_interaction"][0]
+	// userInteraction := formData.Value["user_interaction"][0]
+
+	userInteraction, err := s.SpeechToText(c, audioData)
+	if err != nil {
+		return fmt.Errorf("error processing audio: %v", err)
+	}
 	podcastSession.InteractionPrompt <- []byte(fmt.Sprintf("USERS INTERACTION: %v\n", userInteraction))
 	mu.Unlock()
 

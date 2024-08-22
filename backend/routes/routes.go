@@ -13,7 +13,7 @@ import (
 	"github.com/srgchrksv/geminipodcaster/services"
 )
 
-func RegisterRoutes(r *gin.Engine, model models.Gemini, services *services.Services) {
+func RegisterRoutes(r *gin.Engine, model *models.Gemini, services *services.Services) {
 	store := cookie.NewStore([]byte("secret"))
 	r.Use(sessions.Sessions("mysession", store))
 	// Configure CORS middleware

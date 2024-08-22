@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState , useRef} from 'react';
 import Transcriptions from './Transcriptions';
 import styles from '../styles/Form.module.css';
 
@@ -6,6 +6,9 @@ import styles from '../styles/Form.module.css';
 export default function Form() {
     const [transcriptions, setTranscriptions] = useState([]);
     const [text, setText] = useState('');
+    const [isRecording, setIsRecording] = useState(false);
+    const mediaRecorderRef = useRef(null);
+    const audioChunksRef = useRef([]);
     let textTranscriptionQueue = [];
     let audioQueue = [];
     let isProcessingQueues = false;
@@ -51,6 +54,11 @@ export default function Form() {
                             const text = event.data
                             if (text.includes("USERS INTERACTION:")){ 
                                 setTranscriptions((prevTranscriptions) => [...prevTranscriptions, text]);
+                                textTranscriptionQueue = []
+                                audioQueue = []
+                                setTimeout(() => {
+                                    return
+                                }, 3000);
                                 return
                             }
                             textTranscriptionQueue.push(event.data);
@@ -125,6 +133,57 @@ export default function Form() {
         }
     };
 
+
+    const handleStartRecording = () => {
+        textTranscriptionQueue = []
+        audioQueue = []
+        navigator.mediaDevices.getUserMedia({ audio: true })
+            .then(stream => {
+                const mediaRecorder = new MediaRecorder(stream);
+                mediaRecorderRef.current = mediaRecorder;
+                audioChunksRef.current = [];
+    
+                mediaRecorder.ondataavailable = event => {
+                    audioChunksRef.current.push(event.data);
+                };
+    
+                mediaRecorder.onstop = async () => {
+                    const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/mp3'  });
+                    const formData = new FormData();
+                    formData.append('audio_file', audioBlob, 'interaction.ogg');
+    
+                    try {
+                        const response = await fetch('http://localhost:8000/interact', {
+                            method: 'POST',
+                            body: formData,
+                            credentials: 'include',
+                        });
+    
+                        if (!response.ok) {
+                            console.error('Failed to send audio interaction');
+                        } else {
+                            const data = await response.json();
+                            console.log(data);
+                        }
+                    } catch (error) {
+                        console.error('Error:', error);
+                    }
+                };
+    
+                mediaRecorder.start();
+                setIsRecording(true);
+            })
+            .catch(error => {
+                console.error('Error accessing microphone:', error);
+            });
+    };
+    
+    const handleStopRecording = () => {
+        if (mediaRecorderRef.current) {
+            mediaRecorderRef.current.stop();
+            setIsRecording(false);
+        }
+    };
     return (
         <>
             <div className={styles.container}>
@@ -135,13 +194,22 @@ export default function Form() {
                     </div>
                     <button className={styles.button} type="submit">Submit</button>
                 </form>
-                <form onSubmit={handleSubmitInteraction} className={styles.form}>
+                {/* <form onSubmit={handleSubmitInteraction} className={styles.form}>
                     <div className={styles.inputGroup}>
                         <label className={styles.label}>Interact with podcast:</label>
                         <textarea type="text" id="user_interaction" name="user_interaction" />
                     </div>
                     <button className={styles.button} type="submit">Send message</button>
-                </form>
+                </form> */}
+                <div className={styles.inputGroup}>
+                    <button
+                        className={styles.button}
+                        type="button"
+                        onClick={isRecording ? handleStopRecording : handleStartRecording}
+                    >
+                        {isRecording ? 'Stop Recording' : 'Record Audio To Interact'}
+                    </button>
+                </div>
                 <Transcriptions transcriptions={transcriptions} />
             </div>
         </>

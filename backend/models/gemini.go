@@ -3,6 +3,7 @@ package models
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 
@@ -18,14 +19,14 @@ type Podcast struct {
 }
 
 type Gemini struct {
-	model *genai.GenerativeModel
+	Gemini *genai.GenerativeModel
 }
 
 func NewGemini(model *genai.GenerativeModel) *Gemini {
-	return &Gemini{model: model}
+	return &Gemini{Gemini: model}
 }
 
-func (g Gemini) SendMessages(ctx context.Context, session *genai.ChatSession, podcastContext string) ([]Segment, error) {
+func (g *Gemini) SendMessages(ctx context.Context, session *genai.ChatSession, podcastContext string) ([]Segment, error) {
 	resp, err := session.SendMessage(ctx, genai.Text(podcastContext))
 	if err != nil {
 		log.Fatalf("Error sending message: %v\n", err)
@@ -38,15 +39,20 @@ func (g Gemini) SendMessages(ctx context.Context, session *genai.ChatSession, po
 			}
 		}
 	}
-
 	return podcast.Podcast, nil
 }
 
-func (g Gemini) StartChat() *genai.ChatSession {
-	return &genai.ChatSession{}
-}
+func (g *Gemini) MockGemini(ctx context.Context, session *genai.ChatSession, podcastContext string) ([]Segment, error) {
 
-func (g Gemini) MockGemini(ctx context.Context, session *genai.ChatSession) ([]Segment, error) {
+	log.Printf("Chat Session SEDDD: %+v", session)
+	if session == nil {
+		return []Segment{}, errors.New("chatSession is nil")
+	}
+
+	// Add more logging to trace the function execution
+	log.Printf("Chat Session MOCKGEM: %+v", session)
+	log.Printf("Podcast Context: %+v", podcastContext)
+
 	// Example JSON data
 	jsonData := `{
 	    "podcast": [
