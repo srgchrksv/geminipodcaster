@@ -4,11 +4,9 @@ import (
 	"log"
 	"net/http"
 
-	texttospeech "cloud.google.com/go/texttospeech/apiv1"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
-	"github.com/srgchrksv/geminipodcaster/models"
 	"github.com/srgchrksv/geminipodcaster/services"
 )
 
@@ -18,7 +16,7 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-func StartPodcast(c *gin.Context, model *models.Gemini, services services.Services) {
+func StartPodcast(c *gin.Context, services services.Services) {
 	session := sessions.Default(c)
 	sessionID := session.Get("sessionID")
 	if sessionID == nil {
@@ -35,7 +33,7 @@ func StartPodcast(c *gin.Context, model *models.Gemini, services services.Servic
 
 	podcastSession := sessionID.(string)
 
-	services.Podcast(c, conn, model, podcastSession, &texttospeech.Client{})
+	services.Podcast(c, conn, podcastSession)
 
 }
 

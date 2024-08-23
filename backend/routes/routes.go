@@ -9,11 +9,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/srgchrksv/geminipodcaster/handlers"
-	"github.com/srgchrksv/geminipodcaster/models"
 	"github.com/srgchrksv/geminipodcaster/services"
 )
 
-func RegisterRoutes(r *gin.Engine, model *models.Gemini, services *services.Services) {
+func RegisterRoutes(r *gin.Engine, services *services.Services) {
 	store := cookie.NewStore([]byte("secret"))
 	r.Use(sessions.Sessions("mysession", store))
 	// Configure CORS middleware
@@ -35,7 +34,7 @@ func RegisterRoutes(r *gin.Engine, model *models.Gemini, services *services.Serv
 		c.JSON(http.StatusOK, gin.H{"message": "Podcast starting...", "session_id": podcastSession})
 	})
 	r.GET("/podcast", func(c *gin.Context) {
-		handlers.StartPodcast(c, model, *services)
+		handlers.StartPodcast(c, *services)
 	})
 	r.POST("/interact", func(c *gin.Context) {
 		handlers.PodcastInteraction(c, *services)

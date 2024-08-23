@@ -3,6 +3,7 @@ module github.com/srgchrksv/geminipodcaster
 go 1.23.0
 
 require (
+	cloud.google.com/go/speech v1.25.0
 	cloud.google.com/go/texttospeech v1.8.0
 	github.com/gin-contrib/cors v1.7.2
 	github.com/gin-gonic/gin v1.10.0
@@ -13,7 +14,6 @@ require (
 )
 
 require (
-	cloud.google.com/go/speech v1.25.0 // indirect
 	github.com/gorilla/context v1.1.2 // indirect
 	github.com/gorilla/securecookie v1.1.2 // indirect
 	github.com/gorilla/sessions v1.2.2 // indirect

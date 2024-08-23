@@ -5,13 +5,13 @@ import styles from '../styles/Form.module.css';
 
 export default function Form() {
     const [transcriptions, setTranscriptions] = useState([]);
-    const [text, setText] = useState('');
     const [isRecording, setIsRecording] = useState(false);
     const mediaRecorderRef = useRef(null);
     const audioChunksRef = useRef([]);
     let textTranscriptionQueue = [];
     let audioQueue = [];
     let isProcessingQueues = false;
+
     const handleSubmitContext = async (event) => {
         event.preventDefault();
         setTranscriptions([]);
@@ -35,7 +35,7 @@ export default function Form() {
             const file = formData.get('text_file'); // Assuming the file input name is 'file'
             // console.log(formData);
 
-            if (file && file.type === "text/plain") {
+            if (file && file.type === 'text/plain') {
                 const reader = new FileReader();
                 reader.onload = function (event) {
                     const fileBinary = event.target.result;
@@ -45,40 +45,45 @@ export default function Form() {
                     socket.onopen = function () {
                         console.log('WebSocket connection established');
                         socket.send(fileBinary); // Send file data as binary
+                        socket.send('next message'); 
+                        socket.onclose = function () {
+                            console.log('WebSocket connection closed');
+                        }
                     };
-
 
                     socket.onmessage = (event) => {
                         if (typeof event.data === 'string') {
                             // Add text transcription to the queue
-                            const text = event.data
-                            if (text.includes("USERS INTERACTION:")){ 
+                            const text = event.data;
+                            if (text.includes("USERS INTERACTION:")) {
                                 setTranscriptions((prevTranscriptions) => [...prevTranscriptions, text]);
-                                textTranscriptionQueue = []
-                                audioQueue = []
+                                textTranscriptionQueue = [];
+                                audioQueue = [];
+                                socket.send('next message');
                                 setTimeout(() => {
                                     return
                                 }, 3000);
-                                return
+                                return;
                             }
                             textTranscriptionQueue.push(event.data);
-                            processQueues();
+                            processQueues(socket);
                         } else if (typeof event.data === 'object') {
                             // Add audio to the queue
                             const blob = new Blob([event.data]);
                             audioQueue.push(URL.createObjectURL(blob));
-                            processQueues();
+                            processQueues(socket);
                         }
                     };
                 };
                 reader.readAsArrayBuffer(file); // Read file as ArrayBuffer
+                
             } else {
                 console.error('No valid text file selected');
             }
         } catch (error) {
             console.error('Error:', error);
         }
-        function processQueues() {
+        function processQueues(socket) {
             if (isProcessingQueues) {
                 return;
             }
@@ -98,7 +103,9 @@ export default function Form() {
                 audio.onended = () => {
                     console.log('Audio ended');
                     isProcessingQueues = false;
-                    processQueues();
+                    socket.send('next message');
+                    processQueues(socket);
+                    
                 }
                 console.log('Audio play');
                 audio.play();

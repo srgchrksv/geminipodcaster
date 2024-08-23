@@ -10,9 +10,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/generative-ai-go/genai"
 	"github.com/joho/godotenv"
-	"github.com/srgchrksv/geminipodcaster/models"
 	"github.com/srgchrksv/geminipodcaster/routes"
 	"github.com/srgchrksv/geminipodcaster/services"
+	"github.com/srgchrksv/geminipodcaster/storage"
 	"google.golang.org/api/option"
 )
 
@@ -54,7 +54,7 @@ func main() {
 	model.SetMaxOutputTokens(8192)
 	model.ResponseMIMEType = "application/json"
 	model.SystemInstruction = &genai.Content{
-		Parts: []genai.Part{genai.Text("Generate a very short, fun and engaging podcast based on the provided context. If you see a context message starting with USER INTERCATION, regenerate podcast based on the USER INTERCATION message, try to fullfill USER INTERCATION request. If USER INTERACTION, do not include old messages in new response. Example speaker names are 'Host' and 'Guest', dont include 'User'.")},
+		Parts: []genai.Part{genai.Text("Generate a very short, fun and engaging podcast based on the provided context. If podcast context contains message starting with 'USER INTERCATION:' the podcast is in progress and you have to generate podcast continuation in response to the 'USER INTERCATION:', but in new response never include old conversation messages. Example speaker names are 'Host' and 'Guest', dont include 'User'.")},
 	}
 	// schema for structured response
 	model.ResponseSchema = &genai.Schema{
@@ -80,17 +80,17 @@ func main() {
 		},
 	}
 
-	// Create a new Gemini instance
-	gemini := models.NewGemini(model)
+	// Create a new storage instance
+	storage := storage.NewStorage()
 
 	// Create a new services instance
-	services := services.NewServices()
+	services := services.NewServices(model, storage)
 	services.ClientTextToSpeech = clientTextToSpeech
 	services.ClientSpeechToText = clientSpeechToText
 	services.Voices = []string{"en-AU-Standard-B", "en-AU-Standard-C", "en-IN-Standard-A", "en-IN-Standard-B", "en-GB-Standard-A", "en-GB-Standard-B", "en-US-Standard-A", "en-US-Standard-C"}
 
 	// Create a new gin router
 	r := gin.Default()
-	routes.RegisterRoutes(r, gemini, services)
+	routes.RegisterRoutes(r, services)
 	r.Run(":8000")
 }
